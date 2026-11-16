@@ -217,7 +217,7 @@ function findMergeParent(
  * 1. 同地點 10 分鐘內的較早工單 → MERGED_DUPLICATE（CASE_D 併入 CASE_A）
  * 2. GPS 漂移 ≥ 30m → LOW_CONFIDENCE_VERIFY（CASE_C 防誤判，不因 IoT 0 部就當清空）
  * 3. Vision 0 且 IoT 鎖定 0，且 GPS ≤ 15m → OPPORTUNISTIC_POOL（CASE_A 已被踩走）
- * 4. Vision 與 IoT 都見到車且數量吻合，GPS ≤ 15m → URGENT_DISPATCH（CASE_B 死車阻塞）
+ * 4. Vision 與 IoT 都見到車且數量吻合，GPS ≤ 15m → URGENT_DISPATCH（CASE_B 死車阻塞；CASE_E 溢出黃線、派員整理歸位）
  * 5. 其餘信號互相矛盾 → LOW_CONFIDENCE_VERIFY
  */
 function decideTriage(
@@ -279,10 +279,13 @@ function decideTriage(
     const confidenceScore = clampScore(
       90 + (visionBikeCount === iotLockedBikes ? 5 : 0) - Math.round(gpsErrorMeters * 0.5),
     );
+    const yellowOverflow = ticket.visionObstacleLevel === "YELLOW_OVERFLOW";
     return {
       triageDecision: "URGENT_DISPATCH",
       confidenceScore,
-      triageReason: `Vision 現場 ${visionBikeCount} 部、IoT 鎖定 ${iotLockedBikes} 部，障礙程度 ${ticket.visionObstacleLevel}，GPS 誤差 ±${gpsErrorMeters}m。單車仍在場，已自動路由至「${ticket.geoZone}」分區群組並安排緊急出勤。`,
+      triageReason: yellowOverflow
+        ? `Vision 現場 ${visionBikeCount} 部、IoT 鎖定 ${iotLockedBikes} 部（無移動），GPS 誤差 ±${gpsErrorMeters}m。確認單車溢出黃色格線並阻塞主通道，已自動路由至「${ticket.geoZone}」分區群組，派員整理入黃線指定泊位。`
+        : `Vision 現場 ${visionBikeCount} 部、IoT 鎖定 ${iotLockedBikes} 部，障礙程度 ${ticket.visionObstacleLevel}，GPS 誤差 ±${gpsErrorMeters}m。單車仍在場，已自動路由至「${ticket.geoZone}」分區群組並安排緊急出勤。`,
     };
   }
 
@@ -420,6 +423,30 @@ const INITIAL_CASES: TicketInsert[] = [
     {
       actor: "WhatsApp Intake",
       action: "市民 WhatsApp 重複投訴已入線。地點與 #LOCO-801 相同，相隔 3 分鐘。",
+    },
+  ),
+  buildPendingTicket(
+    {
+      ticketCode: "#LOCO-805",
+      scenarioKey: "CASE_E",
+      geoZone: "新界東｜大埔・太和站",
+      locationName: "太和廣場出口汽水機旁",
+      fullAddress: "太和廣場出口汽水機旁, 太和站, 大埔區, 新界, 中國香港特別行政區",
+      lat: 22.45093,
+      lng: 114.16153,
+      citizenMessage: "太和站出口汽水機前面有幾部單車泊出咗黃線，阻住行去扶手電梯！",
+      reportedAt: "2026-11-16T08:55:22+08:00",
+      visionBikeCount: 7,
+      visionObstacleLevel: "YELLOW_OVERFLOW",
+      visionLandmarks: ["#太和站出口", "#汽水機", "#黃色格線", "#扶手電梯"],
+      iotLockedBikes: 7,
+      iotUnlockedRecently: 0,
+      gpsErrorMeters: 7,
+    },
+    {
+      actor: "WhatsApp Intake",
+      action:
+        "市民 WhatsApp 投訴已入線。太和站出口汽水機旁有單車泊出黃線，IoT 圍欄內 7 部上鎖且無移動，GPS 誤差 ±7m。",
     },
   ),
 ];
@@ -653,6 +680,7 @@ export const submitProofAndClose = mutation({
     proofTimestamp: v.string(),
     proofImageDataUrl: v.string(),
     source: captureSourceValidator,
+    compliance: v.optional(v.union(v.literal("CLEARED"), v.literal("YELLOW_ZONE"))),
   },
   handler: async (ctx, args) => {
     const ticket = await ctx.db.get(args.ticketId);
@@ -694,11 +722,15 @@ export const submitProofAndClose = mutation({
       });
     }
 
+    const yellowZoneReply =
+      "你好，巡邏隊已將該處單車整齊移入黃色指定停泊區，行人通道現已回復暢通，附上現場實時相片供參考…";
     auditLogs.push({
       time: closedAt,
       actor: "CS WhatsApp Auto-Reply",
       action:
-        "已附上時間戳記現場相片，強制證據鏈閉環，自動回覆市民並完成結單。",
+        args.compliance === "YELLOW_ZONE"
+          ? `已附上時間戳記現場相片。Status: ORGANIZED IN YELLOW ZONE。自動回覆市民：「${yellowZoneReply}」`
+          : "已附上時間戳記現場相片，強制證據鏈閉環，自動回覆市民並完成結單。",
     });
 
     await ctx.db.patch(ticket._id, {

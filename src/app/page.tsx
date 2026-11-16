@@ -48,6 +48,7 @@ const PRESET_CASES = [
   { key: "CASE_B", label: "Case B", hint: "將軍澳・死車阻塞" },
   { key: "CASE_C", label: "Case C", hint: "沙田圍・GPS 漂移" },
   { key: "CASE_D", label: "Case D", hint: "大圍站・重複投訴" },
+  { key: "CASE_E", label: "Case E｜太和站", hint: "溢出黃線・需整理歸位" },
 ] as const;
 
 const DECISION_META: Record<
@@ -96,6 +97,7 @@ const SCENE_WASH: Record<string, string> = {
   CASE_B: "from-sky-950 via-cyan-900 to-blue-950",
   CASE_C: "from-stone-900 via-amber-950 to-zinc-950",
   CASE_D: "from-rose-950 via-red-950 to-stone-900",
+  CASE_E: "from-amber-950 via-yellow-900 to-stone-900",
   CUSTOM: "from-lime-950 via-emerald-900 to-zinc-950",
 };
 
@@ -128,6 +130,7 @@ function obstacleLabel(level: string) {
     NONE: "無阻塞",
     MODERATE: "中度阻塞",
     BLOCKING: "嚴重阻塞",
+    YELLOW_OVERFLOW: "溢出黃線",
     SEVERE: "嚴重阻塞",
     HIGH: "高度阻塞",
     UNCERTAIN: "未能判定",
@@ -627,7 +630,7 @@ export default function OperationsConsole() {
   if (tickets.length === 0) {
     return (
       <main className="flex flex-1 items-center justify-center bg-[#07110d] px-6 text-emerald-50">
-        <p className="text-sm">資料庫是空的，正在寫入 4 大測試場景…</p>
+        <p className="text-sm">資料庫是空的，正在寫入 5 大測試場景…</p>
       </main>
     );
   }
@@ -684,7 +687,7 @@ export default function OperationsConsole() {
               disabled={busy !== null}
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-              🔄 重置 4 大測試場景
+              🔄 重置 5 大測試場景
             </button>
           </div>
         </div>

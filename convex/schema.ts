@@ -5,7 +5,7 @@ import { v } from "convex/values";
  * Loco Vibeathons — 減少共享單車巡邏隊的無效現場出勤。
  *
  * 字串欄位的允許值（以 v.string() 儲存，由 mutations 負責約束）：
- * - scenarioKey: "CASE_A" | "CASE_B" | "CASE_C" | "CASE_D" | "CUSTOM"
+ * - scenarioKey: "CASE_A" | "CASE_B" | "CASE_C" | "CASE_D" | "CASE_E" | "CUSTOM"
  * - triageDecision: "PENDING" | "OPPORTUNISTIC_POOL" | "URGENT_DISPATCH" | "LOW_CONFIDENCE_VERIFY" | "MERGED_DUPLICATE"
  * - activeTriggerSource: "PATROL" | "RIDER"
  */

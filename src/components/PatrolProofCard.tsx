@@ -5,13 +5,19 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 
+type AnalyzeCompliance = "CLEARED" | "YELLOW_ZONE" | "BLOCKED";
+type CaptureKind = "cleared" | "yellow" | "upload";
+
 type AnalyzeResult = {
   mode: "live" | "simulation";
   landmarkMatch: number;
   residualBikes: number;
   cleared: boolean;
+  organizedInYellowZone?: boolean;
+  compliance?: AnalyzeCompliance;
   landmarks: string[];
   summary: string;
+  csReply?: string;
 };
 
 export type ProofSource = "PATROL" | "RIDER";
@@ -24,6 +30,9 @@ export type ProofTicket = {
   lat: number;
   lng: number;
   visionLandmarks: string[];
+  scenarioKey?: string;
+  visionObstacleLevel?: string;
+  auditLogs?: Array<{ action: string }>;
   csClosed: boolean;
   proofSubmitted: boolean;
   proofImageDataUrl?: string;
@@ -45,6 +54,9 @@ const CANVAS_HEIGHT = 1200;
 const SUBMIT_URL_LIMIT = 680_000;
 const PROOF_FONT =
   '"PingFang HK", "Noto Sans CJK TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif';
+const YELLOW_STATUS = "Status: ORGANIZED IN YELLOW ZONE";
+const YELLOW_CS_REPLY =
+  "你好，巡邏隊已將該處單車整齊移入黃色指定停泊區，行人通道現已回復暢通，附上現場實時相片供參考…";
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -234,6 +246,150 @@ function drawCleanStreet(
   }
 }
 
+function drawBike(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, 0, 12, 0, Math.PI * 2);
+  ctx.arc(34, 0, 12, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "#1f8a45";
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(16, -20);
+  ctx.lineTo(34, 0);
+  ctx.moveTo(16, -20);
+  ctx.lineTo(16, -2);
+  ctx.moveTo(10, -20);
+  ctx.lineTo(22, -20);
+  ctx.moveTo(16, -20);
+  ctx.lineTo(26, -30);
+  ctx.stroke();
+  ctx.fillStyle = "#f5c518";
+  ctx.fillRect(22, -34, 10, 4);
+  ctx.restore();
+}
+
+function drawYellowZone(
+  ctx: CanvasRenderingContext2D,
+  locationName: string,
+  landmarks: string[],
+) {
+  const sky = ctx.createLinearGradient(0, 0, 0, 420);
+  sky.addColorStop(0, "#9fd0ea");
+  sky.addColorStop(1, "#f3f6f1");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  ctx.fillStyle = "#d7ddd8";
+  ctx.fillRect(0, 250, CANVAS_WIDTH, 230);
+  ctx.fillStyle = "#b7c2bb";
+  ctx.fillRect(40, 180, 250, 300);
+  ctx.fillStyle = "#8fb4c6";
+  for (let column = 0; column < 3; column += 1) {
+    for (let row = 0; row < 4; row += 1) {
+      ctx.fillRect(62 + column * 70, 210 + row * 52, 40, 30);
+    }
+  }
+
+  ctx.fillStyle = "#c23b32";
+  roundRect(ctx, 70, 520, 92, 150, 8);
+  ctx.fill();
+  ctx.fillStyle = "#f4f7f8";
+  ctx.font = `700 18px ${PROOF_FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("汽水", 116, 575);
+  ctx.fillText("機", 116, 602);
+
+  ctx.fillStyle = "#4c5660";
+  ctx.fillRect(210, 470, 150, 200);
+  ctx.strokeStyle = "#d5dbe0";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  for (let step = 0; step < 6; step += 1) {
+    ctx.moveTo(228, 640 - step * 26);
+    ctx.lineTo(342, 640 - step * 26);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `700 16px ${PROOF_FONT}`;
+  ctx.fillText("扶手電梯", 285, 500);
+
+  ctx.fillStyle = "#c2654e";
+  ctx.fillRect(0, 640, CANVAS_WIDTH, CANVAS_HEIGHT - 640);
+  ctx.strokeStyle = "rgba(92, 36, 28, 0.45)";
+  ctx.lineWidth = 2;
+  const brickW = 58;
+  const brickH = 28;
+  for (let row = 0; row < 22; row += 1) {
+    const y = 640 + row * brickH;
+    const offset = row % 2 === 0 ? 0 : brickW / 2;
+    for (let x = -brickW; x < CANVAS_WIDTH; x += brickW) {
+      ctx.strokeRect(x + offset, y, brickW, brickH);
+    }
+  }
+
+  const zoneX = 470;
+  const zoneY = 760;
+  const zoneW = 380;
+  const zoneH = 250;
+  ctx.fillStyle = "rgba(245, 197, 24, 0.34)";
+  ctx.fillRect(zoneX, zoneY, zoneW, zoneH);
+  ctx.strokeStyle = "#e0ac00";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(zoneX + 4, zoneY + 4, zoneW - 8, zoneH - 8);
+  ctx.strokeStyle = "#f7d34a";
+  ctx.lineWidth = 3;
+  for (let index = 1; index < 4; index += 1) {
+    const x = zoneX + (zoneW / 4) * index;
+    ctx.beginPath();
+    ctx.moveTo(x, zoneY + 10);
+    ctx.lineTo(x, zoneY + zoneH - 10);
+    ctx.stroke();
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    drawBike(ctx, zoneX + 28 + index * 92, zoneY + 150);
+  }
+
+  ctx.fillStyle = "#12343f";
+  ctx.font = `700 26px ${PROOF_FONT}`;
+  const titleWidth = Math.min(520, ctx.measureText(locationName).width + 48);
+  roundRect(ctx, 28, 300, titleWidth, 58, 12);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(locationName, 48, 329);
+
+  ctx.fillStyle = "#12343f";
+  ctx.font = `700 20px ${PROOF_FONT}`;
+  const zoneLabel = "黃色格線指定泊位";
+  const zoneLabelWidth = ctx.measureText(zoneLabel).width + 28;
+  roundRect(ctx, zoneX, zoneY - 46, zoneLabelWidth, 36, 10);
+  ctx.fill();
+  ctx.fillStyle = "#f5c518";
+  ctx.textAlign = "left";
+  ctx.fillText(zoneLabel, zoneX + 14, zoneY - 28);
+
+  let chipX = 28;
+  ctx.font = `500 16px ${PROOF_FONT}`;
+  ctx.textBaseline = "middle";
+  for (const landmark of landmarks.slice(0, 3)) {
+    const chipWidth = Math.min(220, ctx.measureText(landmark).width + 22);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    roundRect(ctx, chipX, 380, chipWidth, 32, 16);
+    ctx.fill();
+    ctx.fillStyle = "#243038";
+    ctx.fillText(landmark, chipX + 11, 396);
+    chipX += chipWidth + 8;
+  }
+}
+
 function drawCover(ctx: CanvasRenderingContext2D, image: HTMLImageElement) {
   const scale = Math.max(CANVAS_WIDTH / image.width, CANVAS_HEIGHT / image.height);
   const width = image.width * scale;
@@ -248,6 +404,7 @@ function drawWatermark(
   lat: number,
   lng: number,
   stamp: ReturnType<typeof hkStamp>,
+  organized: boolean,
 ) {
   ctx.save();
   ctx.font = `700 18px ${PROOF_FONT}`;
@@ -255,7 +412,7 @@ function drawWatermark(
   const badgeWidth = ctx.measureText(badge).width + 28;
   const textWidth = CANVAS_WIDTH - 64 - 108 - 16 - badgeWidth - 24;
   const addressLines = wrapText(ctx, `📍 ${fullAddress}`, Math.max(220, textWidth)).slice(0, 3);
-  const cardHeight = Math.max(168, 58 + addressLines.length * 24 + 58);
+  const cardHeight = Math.max(168, 58 + addressLines.length * 24 + 58 + (organized ? 28 : 0));
   const cardX = 16;
   const cardY = CANVAS_HEIGHT - cardHeight - 16;
   const cardWidth = CANVAS_WIDTH - 32;
@@ -285,12 +442,19 @@ function drawWatermark(
   const textX = cardX + 16 + mapSize + 14;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
+  let textTop = cardY + 50;
+  if (organized) {
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = `700 15px ${PROOF_FONT}`;
+    ctx.fillText(YELLOW_STATUS, textX, textTop);
+    textTop += 24;
+  }
   ctx.fillStyle = "#2b2b2b";
   ctx.font = `700 18px ${PROOF_FONT}`;
   addressLines.forEach((line, index) => {
-    ctx.fillText(line, textX, cardY + 50 + index * 24);
+    ctx.fillText(line, textX, textTop + index * 24);
   });
-  const metaY = cardY + 54 + addressLines.length * 24;
+  const metaY = textTop + 4 + addressLines.length * 24;
   ctx.fillStyle = "#5c6570";
   ctx.font = `500 16px ${PROOF_FONT}`;
   ctx.fillText(`📅 日期: ${stamp.date}`, textX, metaY);
@@ -344,6 +508,7 @@ async function composeProofImage(input: {
   lat: number;
   lng: number;
   stamp: ReturnType<typeof hkStamp>;
+  organized: boolean;
 }): Promise<DraftProof> {
   await document.fonts.ready;
   const canvas = document.createElement("canvas");
@@ -352,8 +517,17 @@ async function composeProofImage(input: {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("無法建立現場相片。");
   if (input.photo) drawCover(ctx, input.photo);
+  else if (input.organized) drawYellowZone(ctx, input.locationName, input.landmarks);
   else drawCleanStreet(ctx, input.locationName, input.fullAddress, input.landmarks);
-  drawWatermark(ctx, input.source, input.fullAddress, input.lat, input.lng, input.stamp);
+  drawWatermark(
+    ctx,
+    input.source,
+    input.fullAddress,
+    input.lat,
+    input.lng,
+    input.stamp,
+    input.organized,
+  );
   const pngDataUrl = canvas.toDataURL("image/png");
   return {
     pngDataUrl,
@@ -362,14 +536,40 @@ async function composeProofImage(input: {
   };
 }
 
-const simulationAnalysis = (landmarks: string[]): AnalyzeResult => ({
-  mode: "simulation",
-  landmarkMatch: 96,
-  residualBikes: 0,
-  cleared: true,
-  landmarks,
-  summary: "地標與投訴點吻合，現場未見殘留單車。",
-});
+function simulationAnalysis(landmarks: string[], kind: CaptureKind = "cleared"): AnalyzeResult {
+  if (kind === "yellow" || kind === "upload") {
+    return {
+      mode: "simulation",
+      landmarkMatch: 96,
+      residualBikes: 0,
+      cleared: true,
+      organizedInYellowZone: true,
+      compliance: "YELLOW_ZONE",
+      landmarks,
+      summary: "主通道已暢通（黃線區域合規）。",
+      csReply: YELLOW_CS_REPLY,
+    };
+  }
+  return {
+    mode: "simulation",
+    landmarkMatch: 96,
+    residualBikes: 0,
+    cleared: true,
+    organizedInYellowZone: false,
+    compliance: "CLEARED",
+    landmarks,
+    summary: "地標與投訴點吻合，現場未見殘留單車。",
+  };
+}
+
+function complianceOf(result: AnalyzeResult | null): AnalyzeCompliance {
+  if (!result) return "CLEARED";
+  if (result.compliance === "YELLOW_ZONE" || result.compliance === "BLOCKED" || result.compliance === "CLEARED") {
+    return result.compliance;
+  }
+  if (result.organizedInYellowZone) return "YELLOW_ZONE";
+  return result.residualBikes === 0 ? "CLEARED" : "BLOCKED";
+}
 
 export function PatrolProofCard({
   ticket,
@@ -412,37 +612,57 @@ export function PatrolProofCard({
   }
 
   const closed = ticket.csClosed || ticket.proofSubmitted;
+  const storedYellow = ticket.auditLogs?.some((log) =>
+    log.action.includes("ORGANIZED IN YELLOW ZONE"),
+  );
   const previewUrl = draft?.pngDataUrl ?? ticket.proofImageDataUrl ?? null;
-  const visibleAnalysis = analysis ?? (ticket.proofSubmitted ? simulationAnalysis(ticket.visionLandmarks) : null);
+  const visibleAnalysis =
+    analysis ??
+    (ticket.proofSubmitted
+      ? simulationAnalysis(ticket.visionLandmarks, storedYellow ? "yellow" : "cleared")
+      : null);
+  const visibleCompliance = complianceOf(visibleAnalysis);
+  const organizing =
+    ticket.scenarioKey === "CASE_E" || ticket.visionObstacleLevel === "YELLOW_OVERFLOW";
   const downloadName = `${ticket.ticketCode.replace(/^[#＃]/, "")}-proof.png`;
 
-  async function analyze(imageDataUrl: string) {
+  async function analyze(imageDataUrl: string, kind: CaptureKind) {
+    const fallback = simulationAnalysis(ticket?.visionLandmarks ?? [], kind);
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: visionMode,
+          captureKind: kind,
           locationName: ticket?.locationName,
           fullAddress: ticket?.fullAddress,
           landmarks: ticket?.visionLandmarks ?? [],
           imageDataUrl,
         }),
       });
-      if (!response.ok) return simulationAnalysis(ticket?.visionLandmarks ?? []);
-      return (await response.json()) as AnalyzeResult;
+      if (!response.ok) return fallback;
+      const result = (await response.json()) as AnalyzeResult;
+      if (visionMode !== "live" || result.mode === "simulation") {
+        return kind === "cleared" ? simulationAnalysis(result.landmarks, "cleared") : {
+          ...simulationAnalysis(result.landmarks, kind),
+          landmarkMatch: result.landmarkMatch || 96,
+        };
+      }
+      return result;
     } catch {
-      return simulationAnalysis(ticket?.visionLandmarks ?? []);
+      return fallback;
     }
   }
 
-  async function capture(photo: HTMLImageElement | null) {
+  async function capture(kind: CaptureKind, photo: HTMLImageElement | null) {
     if (!ticket || closed) return;
     setBusy(true);
     setError(null);
     setStatus("正在合成 Loco 水印鐵證…");
     try {
       const stamp = hkStamp();
+      const organized = kind === "yellow" || (kind === "upload" && visionMode !== "live");
       const nextDraft = await composeProofImage({
         source,
         photo,
@@ -452,10 +672,11 @@ export function PatrolProofCard({
         lat: ticket.lat,
         lng: ticket.lng,
         stamp,
+        organized,
       });
       setDraft(nextDraft);
       setStatus(visionMode === "live" ? "Live Vision API 核對地標…" : "正在核對地標…");
-      setAnalysis(await analyze(nextDraft.submitDataUrl));
+      setAnalysis(await analyze(nextDraft.submitDataUrl, kind));
       setStatus(null);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -475,6 +696,7 @@ export function PatrolProofCard({
         proofTimestamp: draft.proofTimestamp,
         proofImageDataUrl: draft.submitDataUrl,
         source,
+        ...(complianceOf(analysis) === "YELLOW_ZONE" ? { compliance: "YELLOW_ZONE" as const } : {}),
       });
       setReward(result.voucherIssued && source === "RIDER");
       setStatus(null);
@@ -533,6 +755,10 @@ export function PatrolProofCard({
                 📍 偵測到你正位於【{ticket.locationName}】30m 範圍內！幫手拍 1 張面前行人路相片（確認無單車阻塞），立即送你{" "}
                 <strong>2 張 30 分鐘踩車券</strong> 🎟️🎟️！
               </p>
+            ) : organizing ? (
+              <p>
+                🔔 整理歸位任務：你正在【{ticket.locationName}】。溢出黃線的單車需要推回指定泊位，請拍攝 1 張主通道暢通相即可合規結單！
+              </p>
             ) : (
               <p>
                 🔔 順路任務觸發：你正途經【{ticket.locationName}】(距離 45m)。系統顯示單車已被踩走，請順手拍攝 1 張空地相即可秒結單！
@@ -556,8 +782,20 @@ export function PatrolProofCard({
           {visibleAnalysis ? (
             <div className="rounded-2xl bg-black/30 px-3 py-2 text-xs leading-5 text-emerald-50">
               <p>✅ AI 地標吻合度 {visibleAnalysis.landmarkMatch}%</p>
-              <p>✅ 現場殘留單車 {visibleAnalysis.residualBikes} 部</p>
-              <p className="mt-1 text-emerald-100/60">{visibleAnalysis.summary}</p>
+              {visibleCompliance === "YELLOW_ZONE" ? (
+                <p>✅ 通道阻塞解除：單車已整齊歸入黃色格線指定泊位（主通道 100% 暢通）</p>
+              ) : visibleCompliance === "BLOCKED" ? (
+                <p>⚠️ 主通道仍有阻塞，未達合規結單標準（通道外殘留 {visibleAnalysis.residualBikes} 部）</p>
+              ) : (
+                <p>✅ 現場殘留單車：0 部 (已清空)</p>
+              )}
+              {visibleCompliance === "YELLOW_ZONE" ? (
+                <p className="mt-2 rounded-xl bg-white/10 px-2 py-2 leading-5 text-emerald-50">
+                  {visibleAnalysis.csReply ?? YELLOW_CS_REPLY}
+                </p>
+              ) : (
+                <p className="mt-1 text-emerald-100/60">{visibleAnalysis.summary}</p>
+              )}
             </div>
           ) : null}
           {status ? <p className="text-xs text-emerald-100/70">{status}</p> : null}
@@ -576,13 +814,21 @@ export function PatrolProofCard({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void capture(null)}
-                className="rounded-xl bg-white px-3 py-2 text-left text-xs font-semibold text-black disabled:opacity-50"
+                onClick={() => void capture("cleared", null)}
+                className="rounded-xl bg-white px-3 py-2 text-left text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
-                ⚡ 一鍵模擬拍攝「現場已清空」街景相
+                ⚡ 模擬拍攝「車已踩走・空地相」
               </button>
-              <label className="cursor-pointer rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-emerald-50">
-                📷 開啟相機 / 上傳現場空地相
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void capture("yellow", null)}
+                className="rounded-xl bg-[#f5c518] px-3 py-2 text-left text-xs font-semibold leading-5 text-[#1c1404] disabled:opacity-50"
+              >
+                🟨 模擬拍攝「單車已整齊歸入黃線泊位」
+              </button>
+              <label className="cursor-pointer rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold leading-5 text-emerald-50">
+                📷 開啟相機 / 上傳現場相片
                 <input
                   type="file"
                   accept="image/*"
@@ -593,7 +839,7 @@ export function PatrolProofCard({
                     const file = event.target.files?.[0];
                     event.target.value = "";
                     if (!file) return;
-                    void readFile(file).then((image) => capture(image)).catch((caught: unknown) => {
+                    void readFile(file).then((image) => capture("upload", image)).catch((caught: unknown) => {
                       setError(errorMessage(caught));
                     });
                   }}
