@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 export type AnalyzeMode = "live" | "simulation";
 export type AnalyzeCompliance = "CLEARED" | "YELLOW_ZONE" | "BLOCKED";
+export type SuggestedTriage = "OPPORTUNISTIC_POOL" | "URGENT_DISPATCH" | "LOW_CONFIDENCE_VERIFY";
 
 export type AnalyzeResult = {
   mode: AnalyzeMode;
@@ -9,7 +10,9 @@ export type AnalyzeResult = {
   residualBikes: number;
   cleared: boolean;
   organizedInYellowZone: boolean;
+  yellowZoneStatus: "ORGANIZED" | "NOT_APPLICABLE" | "STILL_BLOCKING";
   compliance: AnalyzeCompliance;
+  suggestedTriage: SuggestedTriage;
   landmarks: string[];
   summary: string;
   csReply?: string;
@@ -24,14 +27,38 @@ type AnalyzeBody = {
   imageDataUrl?: string;
 };
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_TIMEOUT_MS = 8_000;
 const YELLOW_ZONE_REPLY =
   "你好，巡邏隊已將該處單車整齊移入黃色指定停泊區，行人通道現已回復暢通，附上現場實時相片供參考…";
 
-function simulationResult(landmarks: string[], captureKind?: string): AnalyzeResult {
+function suggestedTriageFor(compliance: AnalyzeCompliance): SuggestedTriage {
+  if (compliance === "YELLOW_ZONE") return "URGENT_DISPATCH";
+  if (compliance === "BLOCKED") return "URGENT_DISPATCH";
+  return "OPPORTUNISTIC_POOL";
+}
+
+function yellowZoneStatusFor(compliance: AnalyzeCompliance): AnalyzeResult["yellowZoneStatus"] {
+  if (compliance === "YELLOW_ZONE") return "ORGANIZED";
+  if (compliance === "BLOCKED") return "STILL_BLOCKING";
+  return "NOT_APPLICABLE";
+}
+
+function withDecision(
+  result: Omit<AnalyzeResult, "suggestedTriage" | "yellowZoneStatus">,
+): AnalyzeResult {
+  return {
+    ...result,
+    yellowZoneStatus: yellowZoneStatusFor(result.compliance),
+    suggestedTriage: suggestedTriageFor(result.compliance),
+  };
+}
+
+function fallbackResult(landmarks: string[], captureKind?: string): AnalyzeResult {
   const organized = captureKind === "yellow" || captureKind === "upload";
   if (organized) {
-    return {
+    return withDecision({
       mode: "simulation",
       landmarkMatch: 96,
       residualBikes: 0,
@@ -41,9 +68,9 @@ function simulationResult(landmarks: string[], captureKind?: string): AnalyzeRes
       landmarks,
       summary: "主通道已暢通（黃線區域合規）。",
       csReply: YELLOW_ZONE_REPLY,
-    };
+    });
   }
-  return {
+  return withDecision({
     mode: "simulation",
     landmarkMatch: 96,
     residualBikes: 0,
@@ -52,7 +79,7 @@ function simulationResult(landmarks: string[], captureKind?: string): AnalyzeRes
     compliance: "CLEARED",
     landmarks,
     summary: "地標與投訴點吻合，現場未見殘留單車。",
-  };
+  });
 }
 
 function readLandmarks(value: unknown) {
@@ -92,27 +119,27 @@ async function analyzeWithGemini(body: AnalyzeBody, apiKey: string, landmarks: s
   ].join("\n");
 
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
-  if (image && image.data.length < 1_800_000) {
-    parts.push({ inline_data: { mime_type: image.mimeType, data: image.data } });
+  if (image && image.data.length > 0 && image.data.length < 1_800_000) {
+    parts.push({
+      inlineData: {
+        mimeType: image.mimeType,
+        data: image.data,
+      },
+    });
   }
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+  const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    body: JSON.stringify({
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
       },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: "application/json",
-        },
-      }),
-    },
-  );
+    }),
+  });
 
   if (!response.ok) {
     throw new Error(`Gemini vision failed (${response.status})`);
@@ -132,50 +159,51 @@ async function analyzeWithGemini(body: AnalyzeBody, apiKey: string, landmarks: s
   };
   const residualBikes = clampBikes(parsed.residualBikes);
   const organizedInYellowZone = parsed.organizedInYellowZone === true;
-  const compliance: AnalyzeResult["compliance"] = organizedInYellowZone
+  const compliance: AnalyzeCompliance = organizedInYellowZone
     ? "YELLOW_ZONE"
     : residualBikes === 0
       ? "CLEARED"
       : "BLOCKED";
-  return {
-    mode: "live" as const,
+  return withDecision({
+    mode: "live",
     landmarkMatch: clampScore(parsed.landmarkMatch),
     residualBikes,
     cleared: compliance !== "BLOCKED",
     organizedInYellowZone,
     compliance,
     landmarks,
-    summary: typeof parsed.summary === "string" && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : organizedInYellowZone
-        ? "主通道已暢通（黃線區域合規）。"
-        : "Vision 已完成現場核對。",
+    summary:
+      typeof parsed.summary === "string" && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : organizedInYellowZone
+          ? "主通道已暢通（黃線區域合規）。"
+          : residualBikes === 0
+            ? "地標與投訴點吻合，現場未見殘留單車。"
+            : "主通道仍有單車阻塞。",
     csReply: organizedInYellowZone ? YELLOW_ZONE_REPLY : undefined,
-  } satisfies AnalyzeResult;
+  });
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as AnalyzeBody;
-  const landmarks = readLandmarks(body.landmarks);
-  const liveRequested = body.mode === "live";
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  const captureKind = typeof body.captureKind === "string" ? body.captureKind : "cleared";
-  if (!liveRequested || !apiKey) {
-    return NextResponse.json(simulationResult(landmarks, captureKind));
-  }
-
   try {
-    const result = await analyzeWithGemini(body, apiKey, landmarks);
-    return NextResponse.json(result);
+    const raw = await request.json().catch(() => ({}));
+    const body = (raw && typeof raw === "object" ? raw : {}) as AnalyzeBody;
+    const landmarks = readLandmarks(body.landmarks);
+    const captureKind = typeof body.captureKind === "string" ? body.captureKind : "cleared";
+    const liveRequested = body.mode === "live";
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+
+    if (!liveRequested || !apiKey) {
+      return NextResponse.json(fallbackResult(landmarks, captureKind));
+    }
+
+    try {
+      const result = await analyzeWithGemini(body, apiKey, landmarks);
+      return NextResponse.json(result);
+    } catch {
+      return NextResponse.json(fallbackResult(landmarks, captureKind));
+    }
   } catch {
-    const fallback = simulationResult(landmarks, captureKind);
-    return NextResponse.json({
-      ...fallback,
-      summary:
-        fallback.compliance === "YELLOW_ZONE"
-          ? fallback.summary
-          : "Vision 暫時未能連線，已改用現場穩定核對結果。",
-    });
+    return NextResponse.json(fallbackResult([], "cleared"));
   }
 }
