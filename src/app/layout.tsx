@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Loco Vibeathons",
-  description: "減少共享單車巡邏隊的無效現場出勤",
+  title: "Loco SmartPatrol Triage",
+  description: "AI 巡邏預判與順路交差系統",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
