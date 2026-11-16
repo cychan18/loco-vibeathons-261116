@@ -15,7 +15,9 @@ import {
   Ticket,
   Zap,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { PatrolProofCard } from "@/components/PatrolProofCard";
 import { api } from "../../convex/_generated/api";
 
 type Dashboard = FunctionReturnType<typeof api.tickets.getAllTickets>;
@@ -253,44 +255,20 @@ function StreetPreview({
   );
 }
 
-function PhoneFrame({ ticket }: { ticket: Ticket | null }) {
-  const source = ticket?.activeTriggerSource;
-  const armed = source === "PATROL" || source === "RIDER";
-  const rider = source === "RIDER";
+function TicketQr({ ticketCode }: { ticketCode: string }) {
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setOrigin(window.location.origin), 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+  const cleanCode = ticketCode.replace(/^[#＃]/, "");
+  const path = `/patrol/${encodeURIComponent(cleanCode)}`;
+  const url = origin ? `${origin}${path}` : path;
 
   return (
-    <div className="mx-auto w-full max-w-[280px] rounded-[2rem] border-[10px] border-[#1b2a22] bg-[#07110d] shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
-      <div className="px-4 pb-4 pt-3">
-        <div className="mx-auto mb-3 h-1.5 w-16 rounded-full bg-white/20" />
-        <div className="flex items-center justify-between text-[10px] text-emerald-100/60">
-          <span>{ticket ? formatHkTime(ticket.reportedAt) : "--:--"}</span>
-          <span>Loco</span>
-        </div>
-        <div
-          className={cx(
-            "mt-3 rounded-2xl border p-3",
-            armed ? "border-emerald-300/40 bg-emerald-950/50" : "border-white/10 bg-white/5",
-          )}
-        >
-          <p className="text-[11px] text-emerald-100/70">觸發來源</p>
-          <p className="mt-1 text-lg font-semibold text-white">
-            {source === "PATROL" ? "Patrol 已啟動" : rider ? "Loco Rider 已啟動" : "尚未啟動"}
-          </p>
-          <p className="mt-2 text-xs leading-5 text-emerald-50/80">
-            {source === "PATROL"
-              ? "軌跡 A：隊員進入 50m 圍欄，順路拍攝。水印 🚲 by LOCO PATROL。"
-              : rider
-                ? "軌跡 B：Rider 在 30m 內開啟 App。完成核對後派 2 張 30 分鐘踩車券。水印 🎟️ by LOCO RIDER。"
-                : "確認清空並進入順路池後，Patrol 或 Rider 觸發會點亮這支手機。"}
-          </p>
-        </div>
-        <div className="mt-3 rounded-2xl bg-black/40 p-3 text-xs text-emerald-50/80">
-          <p className="font-mono text-sm text-white">{ticket?.ticketCode ?? "—"}</p>
-          <p className="mt-1">{ticket?.locationName ?? "未選擇工單"}</p>
-          <p className="mt-2 text-[11px] text-emerald-100/50">{ticket?.geoZone ?? "等待分區"}</p>
-        </div>
-      </div>
-    </div>
+    <a href={path} className="rounded-xl bg-white p-1.5" title={url} aria-label={`開啟 ${cleanCode} 手機打卡頁`}>
+      <QRCodeSVG value={url} size={84} level="M" />
+    </a>
   );
 }
 
@@ -848,14 +826,14 @@ export default function OperationsConsole() {
         </section>
 
         <section className="flex min-w-0 flex-col gap-3 rounded-3xl border border-white/10 bg-[#0c1813] p-3">
-          <h2 className="flex items-center gap-2 text-xs font-semibold tracking-[0.14em] text-emerald-200/70">
-            <Smartphone className="h-3.5 w-3.5" aria-hidden />
-            右欄 30%・手機端
-          </h2>
-          <PhoneFrame ticket={selected} />
-          <p className="text-center text-[11px] leading-5 text-emerald-100/50">
-            這裡先預留 Patrol／Loco Rider 拍攝畫面。目前只顯示觸發來源有沒有啟動。
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-xs font-semibold tracking-[0.14em] text-emerald-200/70">
+              <Smartphone className="h-3.5 w-3.5" aria-hidden />
+              右欄 30%・順路秒拍打卡
+            </h2>
+            {selected ? <TicketQr ticketCode={selected.ticketCode} /> : null}
+          </div>
+          <PatrolProofCard ticket={selected} visionMode={visionMode} compact />
         </section>
       </section>
     </main>
