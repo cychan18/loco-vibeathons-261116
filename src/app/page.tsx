@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Smartphone,
   Ticket,
+  X,
   Zap,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
@@ -27,6 +28,10 @@ type VisionMode = "live" | "fast";
 
 const SAVED_MINUTES_PER_TRIP = 20;
 const LIVE_VISION_DELAY_MS = 1300;
+const DEDICATED_TRIP_COST_LOW = 60;
+const DEDICATED_TRIP_COST_HIGH = 80;
+
+type BlueprintTab = "roi" | "pilot";
 
 const GEO_ZONES = [
   "港島南區",
@@ -163,6 +168,223 @@ async function readImageFile(file: File) {
   });
 }
 
+function formatCount(value: number) {
+  return value.toLocaleString("zh-HK");
+}
+
+function formatHours(value: number) {
+  return value.toLocaleString("zh-HK", { maximumFractionDigits: 1 });
+}
+
+function BlueprintModal({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<BlueprintTab>("roi");
+  const [dailyComplaints, setDailyComplaints] = useState(50);
+  const [emptyRunRate, setEmptyRunRate] = useState(40);
+  const [tripMinutes, setTripMinutes] = useState(20);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const monthlyTrips = Math.round(dailyComplaints * (emptyRunRate / 100) * 30);
+  const monthlyHours = (monthlyTrips * tripMinutes) / 60;
+  const monthlyCostLow = monthlyTrips * DEDICATED_TRIP_COST_LOW;
+  const monthlyCostHigh = monthlyTrips * DEDICATED_TRIP_COST_HIGH;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-6 sm:py-10"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="blueprint-title"
+        className="w-full max-w-3xl rounded-3xl border border-amber-200/30 bg-[#0c1813] p-4 text-emerald-50 shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:p-6"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] tracking-[0.16em] text-amber-200/80">LOCO PILOT BLUEPRINT</p>
+            <h2 id="blueprint-title" className="mt-1 text-lg font-semibold text-white">
+              📊 營運效益計算機 & Loco 試點藍圖
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="rounded-full border border-white/15 p-2 text-emerald-50/80 hover:bg-white/10"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="效益與試點">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "roi"}
+            className={cx(
+              "rounded-full px-3 py-2 text-xs font-medium",
+              tab === "roi" ? "bg-amber-300 text-black" : "border border-white/15 text-emerald-50/80",
+            )}
+            onClick={() => setTab("roi")}
+          >
+            🧮 Patrol 減廢與 Rider 眾包效益計算機
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "pilot"}
+            className={cx(
+              "rounded-full px-3 py-2 text-xs font-medium",
+              tab === "pilot" ? "bg-emerald-400 text-black" : "border border-white/15 text-emerald-50/80",
+            )}
+            onClick={() => setTab("pilot")}
+          >
+            🚀 風險控制與下週試點計劃
+          </button>
+        </div>
+
+        {tab === "roi" ? (
+          <div role="tabpanel" className="mt-5 space-y-5">
+            <label className="block">
+              <span className="flex items-baseline justify-between gap-3 text-sm text-emerald-50">
+                每日 WhatsApp 違泊投訴單量
+                <strong className="font-mono text-base text-amber-200">{dailyComplaints} 宗</strong>
+              </span>
+              <input
+                type="range"
+                min={10}
+                max={200}
+                step={1}
+                value={dailyComplaints}
+                aria-label="每日 WhatsApp 違泊投訴單量"
+                className="mt-2 w-full accent-amber-300"
+                onChange={(event) => setDailyComplaints(Number(event.target.value))}
+              />
+            </label>
+            <label className="block">
+              <span className="flex items-baseline justify-between gap-3 text-sm text-emerald-50">
+                到達發現「車已踩走」空跑率
+                <strong className="font-mono text-base text-amber-200">{emptyRunRate}%</strong>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={80}
+                step={1}
+                value={emptyRunRate}
+                aria-label="到達發現車已踩走空跑率"
+                className="mt-2 w-full accent-amber-300"
+                onChange={(event) => setEmptyRunRate(Number(event.target.value))}
+              />
+            </label>
+            <label className="block">
+              <span className="flex items-baseline justify-between gap-3 text-sm text-emerald-50">
+                每次專程出勤平均耗時
+                <strong className="font-mono text-base text-amber-200">{tripMinutes} 分鐘</strong>
+              </span>
+              <input
+                type="range"
+                min={10}
+                max={45}
+                step={1}
+                value={tripMinutes}
+                aria-label="每次專程出勤平均耗時"
+                className="mt-2 w-full accent-amber-300"
+                onChange={(event) => setTripMinutes(Number(event.target.value))}
+              />
+            </label>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <article className="rounded-2xl border border-amber-200/40 bg-amber-300/15 px-4 py-4">
+                <p className="text-xs text-amber-100/80">每月攔截無效專程出勤趟數</p>
+                <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-amber-200">
+                  {formatCount(monthlyTrips)} 趟
+                </p>
+                <p className="mt-1 text-xs leading-5 text-emerald-50/70">
+                  {dailyComplaints} 宗/日 × {emptyRunRate}% × 30 日
+                </p>
+              </article>
+              <article className="rounded-2xl border border-emerald-300/40 bg-emerald-400/10 px-4 py-4">
+                <p className="text-xs text-emerald-100/80">每月釋放 Patrol 前線工時</p>
+                <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-emerald-200">
+                  {formatHours(monthlyHours)} 小時
+                </p>
+                <p className="mt-1 text-xs leading-5 text-emerald-50/70">
+                  {formatCount(monthlyTrips)} 趟 × {tripMinutes} 分鐘
+                </p>
+              </article>
+            </div>
+
+            <article className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
+              <p className="text-sm font-semibold text-white">成本效益對比</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-red-400/30 bg-red-950/50 px-3 py-3">
+                  <p className="text-xs text-red-100/80">派 Patrol 專程空跑</p>
+                  <p className="mt-1 text-lg font-semibold text-white">HK$60–80 / 趟</p>
+                  <p className="mt-1 text-xs leading-5 text-red-50/80">
+                    人工、車油與機會成本。以目前假設計，每月約 HK$
+                    {formatCount(monthlyCostLow)}–{formatCount(monthlyCostHigh)}。
+                  </p>
+                </div>
+                <div className="rounded-xl border border-emerald-300/40 bg-emerald-950/60 px-3 py-3">
+                  <p className="text-xs text-emerald-100/80">順路核實</p>
+                  <p className="mt-1 text-lg font-semibold text-emerald-200">邊際成本近乎 $0</p>
+                  <p className="mt-1 text-xs leading-5 text-emerald-50/80">
+                    Patrol 順路補拍沒有額外車程。Loco Rider 順路拍照換 2 張 30 分鐘踩車券，同時提高復購率。
+                  </p>
+                </div>
+              </div>
+              <p className="mt-3 rounded-xl bg-amber-300 px-3 py-2 text-sm font-semibold text-black">
+                節省超過 95% 核實成本。
+              </p>
+            </article>
+          </div>
+        ) : (
+          <div role="tabpanel" className="mt-5 space-y-3">
+            <article className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
+              <h3 className="text-sm font-semibold text-white">貼合現有分區群組習慣（Auto-Zone Routing）</h3>
+              <p className="mt-2 text-sm leading-6 text-emerald-50/85">
+                保留 Loco 按地區 WhatsApp Group 協調 Patrol 人手的運作模式。系統只把急單推入群組，已清空的工單則靜默轉入地理圍欄順路池。
+              </p>
+            </article>
+            <article className="rounded-2xl border border-orange-300/30 bg-orange-950/40 px-4 py-4">
+              <h3 className="text-sm font-semibold text-orange-50">False-Positive 誤判防線</h3>
+              <p className="mt-2 text-sm leading-6 text-orange-50/90">
+                凡 GPS 誤差超過 30m，或 Vision AI 偵測到壞車、阻礙盲人徑，系統強制推入分區群組優先巡查（如 Case C）。寧可穩陣，絕不漏單。
+              </p>
+            </article>
+            <article className="rounded-2xl border border-emerald-300/30 bg-emerald-950/40 px-4 py-4">
+              <h3 className="text-sm font-semibold text-emerald-50">Loco 兩階段試點路線圖</h3>
+              <ol className="mt-3 space-y-3 text-sm leading-6 text-emerald-50/90">
+                <li>
+                  <strong className="text-white">Phase 1｜Week 1–2</strong>
+                  <span className="mt-1 block">
+                    沙田／大圍區 Shadow Mode 影子測試，驗證 AI 預判準確率高於 90%。
+                  </span>
+                </li>
+                <li>
+                  <strong className="text-white">Phase 2｜Week 3–4</strong>
+                  <span className="mt-1 block">
+                    啟用 50m Patrol 順路觸發，以及 30m Loco App 用戶「影相送 2 張 30 分鐘踩車券」。
+                  </span>
+                </li>
+              </ol>
+            </article>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({
   icon,
   label,
@@ -285,6 +507,7 @@ export default function OperationsConsole() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [blueprintOpen, setBlueprintOpen] = useState(false);
   const [streetPhotos, setStreetPhotos] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState({
     locationName: "鴨脷洲徑",
@@ -422,6 +645,13 @@ export default function OperationsConsole() {
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex items-center rounded-full bg-amber-300 px-3 py-2 text-xs font-semibold text-black shadow-[0_0_24px_rgba(252,211,77,0.35)] hover:bg-amber-200"
+              onClick={() => setBlueprintOpen(true)}
+            >
+              📊 營運效益計算機 & Loco 試點藍圖
+            </button>
             <div className="flex rounded-full border border-white/10 bg-black/30 p-1 text-xs">
               <button
                 type="button"
@@ -836,6 +1066,7 @@ export default function OperationsConsole() {
           <PatrolProofCard ticket={selected} visionMode={visionMode} compact />
         </section>
       </section>
+      {blueprintOpen ? <BlueprintModal onClose={() => setBlueprintOpen(false)} /> : null}
     </main>
   );
 }
