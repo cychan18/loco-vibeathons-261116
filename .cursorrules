@@ -1,0 +1,4 @@
+- Tech Stack: Next.js (App Router, src/ directory), TypeScript, Tailwind CSS, Lucide React, Convex.
+- Always include `"use client";` at the top of interactive React pages/components.
+- Never use placeholder comments like `// ... existing code ...`; always write complete, runnable files.
+- Ensure Convex queries/mutations match `convex/schema.ts` strictly.
